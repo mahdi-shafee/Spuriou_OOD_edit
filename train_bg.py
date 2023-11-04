@@ -20,6 +20,7 @@ parser = argparse.ArgumentParser(description=' use resnet (pretrained)')
 
 parser.add_argument('--in-dataset', default="celebA", type=str, choices = ['celebA', 'color_mnist', 'waterbird'], help='in-distribution dataset e.g. IN-9')
 parser.add_argument('--model-arch', default='resnet18', type=str, help='model architecture e.g. resnet50')
+parser.add_argument('--mix_appr', default='None', type=str)
 parser.add_argument('--domain-num', default=4, type=int,
                     help='the number of environments for model training')
 parser.add_argument('--method', default='erm', type=str, help='method used for model training')
@@ -103,6 +104,25 @@ set_random_seed(args.manualSeed)
 def flatten(list_of_lists):
     return itertools.chain.from_iterable(list_of_lists)
 
+def mixup_data(x, y, alpha=1.0, use_cuda=True):
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    batch_size = x.size()[0]
+    if use_cuda:
+        index = torch.randperm(batch_size).cuda()
+    else:
+        index = torch.randperm(batch_size)
+
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
+    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+
 def train(model, train_loaders, criterion, optimizer, epoch, log):
     """Train for one epoch on the training set"""
     batch_time = AverageMeter()
@@ -126,9 +146,16 @@ def train(model, train_loaders, criterion, optimizer, epoch, log):
             input = input.cuda()
             target = target.cuda()
 
+            if args.mix_appr == 'Mixup':
+                print('check')
+                input, target_a, target_b, lam = mixup_data(input, target, 1, True)
+                input, target_a, target_b = map(Variable, (input, target_a, target_b))
+
             _, nat_output = model(input)
             
             nat_loss = criterion(nat_output, target)
+            if args.mix_appr == 'Mixup':
+                nat_loss = mixup_criterion(criterion, nat_output, target_a, target_b, lam)
 
             # measure accuracy and record loss
             nat_prec1 = accuracy(nat_output.data, target, topk=(1,))[0]
